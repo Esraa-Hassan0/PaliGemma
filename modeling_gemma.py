@@ -98,17 +98,33 @@ class PaliGemmaConfig:
         self.image_token_index = image_token_index
         self.hidden_size = hidden_size
         self.vocab_size = vocab_size
-        self.vision_config = vision_config
-        self.vision_config = SiglipVisionConfig(**vision_config)
-        self.text_config = text_config
+
+        if isinstance(vision_config, dict):
+            self.vision_config = SiglipVisionConfig(**vision_config)
+        elif isinstance(vision_config, SiglipVisionConfig):
+            self.vision_config = vision_config
+        elif vision_config is None:
+            self.vision_config = SiglipVisionConfig()
+        else:
+            self.vision_config = vision_config
+
         self.is_encoder_decoder = False
         self.pad_token_id = pad_token_id
         self.vision_config.projection_dim = projection_dim
-        self.text_config = text_config
-        self.text_config = GemmaConfig(**text_config, pad_token_id=pad_token_id)
+
+        if isinstance(text_config, dict):
+            self.text_config = GemmaConfig(**text_config, pad_token_id=pad_token_id)
+        elif isinstance(text_config, GemmaConfig):
+            self.text_config = text_config
+        elif text_config is None:
+            self.text_config = GemmaConfig(pad_token_id=pad_token_id)
+        else:
+            self.text_config = text_config
+
         self.text_config.num_image_tokens = (
-            self.vision_config.image // self.vision_config.patch_size
+            self.vision_config.img_size // self.vision_config.patch_size
         ) ** 2
+        self.vision_config.num_img_tokens = self.text_config.num_image_tokens
 
 
 class GemmaRMSNorm(nn.Module):
@@ -162,11 +178,7 @@ class GemmaRotaryEmbedding(nn.Module):
 
         device_type = x.device.type
 
-        device_type = (
-            device_type
-            if isinstance(device_type, str) and device_type != "mps"
-            else "cpu"
-        )
+        device_type = device_type if isinstance(device_type, str) else "cpu"
 
         with torch.autocast(device_type=device_type, enabled=False):
             # Calculate rotation angles (m * theta)
@@ -350,8 +362,8 @@ class GemmaAttention(nn.Module):
         # (B, Num_heads, Num_patches, head_dim) => (B, Num_patches, Num_heads, head_dim)
         attn_outputs = attn_outputs.transpose(1, 2).contiguous()
 
-        # (B, Num_patches, Num_heads, head_dim) =>  (B, Num_patches, embed_dim)
-        attn_outputs = attn_outputs.reshape(batch_size, seq_len, self.embed_dim)
+        # (B, Num_patches, Num_heads, head_dim) =>  (B, Num_patches, hidden_size)
+        attn_outputs = attn_outputs.reshape(batch_size, seq_len, self.hidden_size)
 
         # (B, Num_patches, embed_dim) =>  (B, Num_patches, embed_dim)
         attn_outputs = self.out_proj(attn_outputs)
@@ -558,9 +570,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
             text_mask_expanded, inputs_embeds, final_embeddings
         )
 
-        final_embeddings[image_mask] = final_embeddings.scatter(
-            image_mask_expanded, scaled_image_feats
-        )
+        final_embeddings[image_mask] = scaled_image_feats.view(-1, embed_dim)
 
         final_embeddings = torch.where(
             pad_mask_expanded, torch.zeros_like(final_embeddings), final_embeddings
@@ -620,9 +630,17 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         # that retrieved embedding layer to convert them into high-dimensional vectors.
         input_embeds = self.language_model.get_input_embeddings()(input_ids)
 
-        selected_image_feature = self.vision_tower(pixel_values.to(input_embeds.dtype))
+        batch_size, seq_len = input_ids.shape
 
-        image_features = self.multi_modal_projector(selected_image_feature)
+        if pixel_values is not None:
+            selected_image_feature = self.vision_tower(pixel_values.to(input_embeds.dtype))
+            image_features = self.multi_modal_projector(selected_image_feature)
+        else:
+            image_features = torch.zeros(
+                (batch_size, 0, self.config.vision_config.projection_dim),
+                dtype=input_embeds.dtype,
+                device=input_embeds.device,
+            )
 
         final_embeddings, causal_mask, position_ids = (
             self._merge_input_ids_with_image_features(
@@ -631,7 +649,10 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         )
 
         outputs = self.language_model(
-            causal_mask, position_ids, final_embeddings, kv_cache
+            attention_mask=causal_mask,
+            position_ids=position_ids,
+            input_embeds=final_embeddings,
+            kv_cache=kv_cache,
         )
 
         return outputs
