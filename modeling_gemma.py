@@ -99,6 +99,7 @@ class PaliGemmaConfig:
         self.hidden_size = hidden_size
         self.vocab_size = vocab_size
 
+        vision_config.pop("model_type", None)
         if isinstance(vision_config, dict):
             self.vision_config = SiglipVisionConfig(**vision_config)
         elif isinstance(vision_config, SiglipVisionConfig):
@@ -276,7 +277,7 @@ class GemmaAttention(nn.Module):
             self.num_key_value_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        self.out_proj = nn.Linear(
+        self.o_proj = nn.Linear(
             self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
         )
 
@@ -310,12 +311,12 @@ class GemmaAttention(nn.Module):
 
         # (B, Num_patches, num_kv_heads * Embed_dim) =>  (B, Num_patches, Num_heads, Embed_dim)  =>  (B, Num_heads, Num_patches, head_dim)
         value_states = value_states.view(
-            batch_size, seq_len, self.num_heads, self.head_dim
+            batch_size, seq_len, self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
 
         # (B, Num_patches, num_kv_heads * Embed_dim) =>  (B, Num_patches, Num_heads, Embed_dim)  =>  (B, Num_heads, Num_patches, head_dim)
         key_states = key_states.view(
-            batch_size, seq_len, self.num_heads, self.head_dim
+            batch_size, seq_len, self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
 
         # We could have passed query_states or key_states instead of value_states
@@ -363,10 +364,10 @@ class GemmaAttention(nn.Module):
         attn_outputs = attn_outputs.transpose(1, 2).contiguous()
 
         # (B, Num_patches, Num_heads, head_dim) =>  (B, Num_patches, hidden_size)
-        attn_outputs = attn_outputs.reshape(batch_size, seq_len, self.hidden_size)
+        attn_outputs = attn_outputs.reshape(batch_size, seq_len, -1)
 
         # (B, Num_patches, embed_dim) =>  (B, Num_patches, embed_dim)
-        attn_outputs = self.out_proj(attn_outputs)
+        attn_outputs = self.o_proj(attn_outputs)
 
         return attn_outputs, attn_weights
 
@@ -377,11 +378,17 @@ class GemmaDecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_atten = GemmaAttention(config, layer_idx)
+        self.self_attn = GemmaAttention(config, layer_idx)
 
         self.mlp = GemmaMLP(config)
         self.input_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = GemmaRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.pre_feedforward_layernorm = GemmaRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.post_feedforward_layernorm = GemmaRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
 
@@ -397,17 +404,21 @@ class GemmaDecoderLayer(nn.Module):
 
         hidden_states = self.input_layernorm(hidden_states)
 
-        hidden_states, _ = self.self_atten(
+        hidden_states, _ = self.self_attn(
             hidden_states, attention_mask, position_ids, kv_cache
         )
+
+        hidden_states = self.post_attention_layernorm(hidden_states)
 
         hidden_states = residual + hidden_states
 
         residual = hidden_states
 
-        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.pre_feedforward_layernorm(hidden_states)
 
         hidden_states = self.mlp(hidden_states)
+
+        hidden_states = self.post_feedforward_layernorm(hidden_states)
 
         return hidden_states + residual
 
@@ -492,7 +503,7 @@ class GemmaForCausalLM(nn.Module):
         if kv_cache is not None:
             return_data["kv_cache"] = kv_cache
 
-        return logits
+        return return_data
 
 
 class PaliGemmaMultiModalProjector(nn.Module):
@@ -545,7 +556,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
         # a scaling step so that the magnitude of the image embeddings is compatible with the model's embedding scale
         # (B, Seq_len, Hidden_size)
-        scaled_image_feats = image_features / (self.config.hidden_size**0.5)
+        scaled_image_features = image_features / (self.config.hidden_size**0.5)
 
         final_embeddings = torch.zeros(
             batch_size, seq_len, embed_dim, dtype=dtype, device=device
@@ -570,7 +581,10 @@ class PaliGemmaForConditionalGeneration(nn.Module):
             text_mask_expanded, inputs_embeds, final_embeddings
         )
 
-        final_embeddings[image_mask] = scaled_image_feats.view(-1, embed_dim)
+        final_embeddings = final_embeddings.masked_scatter(
+            image_mask_expanded, scaled_image_features
+        )
+        # Zero out padding tokens
 
         final_embeddings = torch.where(
             pad_mask_expanded, torch.zeros_like(final_embeddings), final_embeddings
@@ -586,10 +600,12 @@ class PaliGemmaForConditionalGeneration(nn.Module):
             # Mask out future tokens (Causal mapping)
             causal_mask = torch.full(
                 (batch_size, seq_len, seq_len),
-                fill_value=min_dtype,
+                fill_value=0,
                 dtype=dtype,
                 device=device,
             )
+            # causal_mask = torch.full((batch_size, seq_len, seq_len), fill_value=min_dtype, dtype=dtype, device=device)
+            # causal_mask = torch.triu(causal_mask, diagonal=1)
 
         else:
             assert seq_len == 1
@@ -603,14 +619,16 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         causal_mask = causal_mask.unsqueeze(1)
 
         if kv_cache is not None and kv_cache.num_items() > 0:
-            position_ids = attention_mask.cumsum(-1)[:, -1]
-            if position_ids.dim() == 1:
-                position_ids = position_ids.unsqueeze(0)
+            # position_ids = attention_mask.cumsum(-1)[:, -1]
+            # if position_ids.dim() == 1:
+            #     position_ids = position_ids.unsqueeze(0)
+            # kv_cache.num_items() already equals current sequence length (0-indexed position)
+            position_ids = torch.tensor([[kv_cache.num_items()]], device=device)
 
         else:
             position_ids = (
-                (attention_mask.cumsum(-1))
-                .masked_fill_((attention_mask == 0), 1)
+                (attention_mask.cumsum(-1) - 1)
+                .masked_fill_((attention_mask == 0), 0)
                 .to(device)
             )
 
@@ -633,7 +651,9 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         batch_size, seq_len = input_ids.shape
 
         if pixel_values is not None:
-            selected_image_feature = self.vision_tower(pixel_values.to(input_embeds.dtype))
+            selected_image_feature = self.vision_tower(
+                pixel_values.to(input_embeds.dtype)
+            )
             image_features = self.multi_modal_projector(selected_image_feature)
         else:
             image_features = torch.zeros(

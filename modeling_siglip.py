@@ -19,6 +19,7 @@ class SiglipVisionConfig:
         layer_norm_eps=1e-5,
         attention_dropout=0.0,
         num_img_tokens: int = None,
+        **kwargs,
     ):
         super().__init__()
 
@@ -46,7 +47,7 @@ class SiglipVisionEmbeddings(nn.Module):
         self.image_size = config.img_size
         self.patch_size = config.patch_size
 
-        self.patch_embeddings = nn.Conv2d(
+        self.patch_embedding = nn.Conv2d(
             in_channels=config.num_channels,
             out_channels=self.embed_dim,
             kernel_size=self.patch_size,
@@ -62,12 +63,12 @@ class SiglipVisionEmbeddings(nn.Module):
             persistent=False,
         )
 
-    def forward(self, pixel_values: torch.Float) -> torch.Tensor:
+    def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
 
         # Convolve the `patch_size` kernel over the image, with no overlapping patches since the stride is equal to the kernel size
         # The output of the convolution will have shape [B, Embed_Dim, Num_Patches_H, Num_Patches_W]
         # where Num_Patches_H = height // patch_size and Num_Patches_W = width // patch_size
-        patch_embeds = self.patch_embeddings(pixel_values)
+        patch_embeds = self.patch_embedding(pixel_values)
 
         # [B, Embed_Dim, Num_Patches_H, Num_Patches_W] -> [B, Embed_Dim, Num_Patches]
         # where Num_Patches = Num_Patches_H * Num_Patches_W
