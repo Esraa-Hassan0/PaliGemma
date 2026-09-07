@@ -134,8 +134,8 @@ class PaliGemmaProcessor:
             add_img_tokens_to_prompt(
                 prefix_prompt=prompt,
                 bos_token=self.tokenizer.bos_token,
-                image_seq_len=self.image_seq_len,
-                image_token=self.IMAGE_TOKEN,
+                img_seq_len=self.image_seq_length,
+                img_token=self.IMAGE_TOKEN,
             )
             for prompt in text
         ]
