@@ -9,16 +9,16 @@ class SiglipVisionConfig:
     """
     def __init__(
         self,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
+        hidden_size=1152,
+        intermediate_size=4304,
+        num_hidden_layers=27,
+        num_attention_heads=16,
         num_channels=3,
-        img_size=224,
-        patch_size=16,
-        layer_norm_eps=1e-5,
+        image_size=224,
+        patch_size=14,
+        layer_norm_eps=1e-6,
         attention_dropout=0.0,
-        num_img_tokens: int = None,
+        num_image_tokens: int = None,
         **kwargs,
     ):
         super().__init__()
@@ -30,8 +30,14 @@ class SiglipVisionConfig:
         self.patch_size = patch_size
         self.layer_norm_eps = layer_norm_eps
         self.attention_dropout = attention_dropout
-        self.num_img_tokens = num_img_tokens
-        self.img_size = img_size
+
+        image_size = kwargs.get("img_size", image_size)
+        self.image_size = image_size
+        self.img_size = image_size
+
+        num_tokens = kwargs.get("num_img_tokens", num_image_tokens)
+        self.num_image_tokens = num_tokens
+        self.num_img_tokens = num_tokens
         self.num_attention_heads = num_attention_heads
 
 

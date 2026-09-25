@@ -60,6 +60,7 @@ def process_images(
     resize, convert to numpy, rescale, normalize, and transpose to CHW format
     """
     h, w = size[0], size[1]
+    images = [image.convert("RGB") if image.mode != "RGB" else image for image in images]
     images = [resize(img=image, size=(h, w), resample=resample) for image in images]
 
     images = [np.array(image) for image in images]
@@ -91,12 +92,14 @@ class PaliGemmaProcessor:
         EXTRA_TOKENS = [
             f"<loc{i:04d}>" for i in range(1024)
         ]  # For object detection (bounding boxes)
-        EXTRA_TOKENS += [f"<seq{i:03d}>" for i in range(128)]  # For object segmentation
+        EXTRA_TOKENS += [f"<seg{i:03d}>" for i in range(128)]  # For object segmentation
         tokenizer.add_tokens(EXTRA_TOKENS)
         self.image_token_id = tokenizer.convert_tokens_to_ids(self.IMAGE_TOKEN)
 
-        tokenizer.add_bos_token = False  # we will add them ourselves later
-        tokenizer.add_eos_token = False  # we will add them ourselves later
+        if hasattr(tokenizer, "add_bos_token"):
+            tokenizer.add_bos_token = False  # we will add them ourselves later
+        if hasattr(tokenizer, "add_eos_token"):
+            tokenizer.add_eos_token = False  # we will add them ourselves later
 
         self.tokenizer = tokenizer
 
@@ -105,7 +108,7 @@ class PaliGemmaProcessor:
         text: List[str],
         images: List[Image.Image],
         padding: str = "longest",
-        truncation: bool = True,
+        truncation: bool = False,
     ) -> dict:
         """
         Processes a pair of (texts, images) to return padded input tensors.
@@ -127,7 +130,7 @@ class PaliGemmaProcessor:
         pixel_values = np.stack(pixel_values, axis=0)
 
         # Convert the numpy array to a PyTorch tensor
-        pixel_values = torch.tensor(pixel_values)
+        pixel_values = torch.tensor(pixel_values, dtype=torch.float32)
 
         # Prepend a `self.image_seq_len` number of image tokens to the prompt
         input_strings = [
