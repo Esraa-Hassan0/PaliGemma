@@ -3,8 +3,8 @@
 MODEL_PATH="data/paligemma-weights/paligemma-3b-pt-224"
 PROMPT="what is the type of this eye?"
 IMAGE_FILE_PATH="data/test_imgs/img001.jpg"
-DO_SAMPLE="FALSE"
-ONLY_CPU="FALSE"
+DO_SAMPLE="False"
+ONLY_CPU="False"
 TOP_P=0.90
 TEMPERATURE=0.8
 MAX_TOKENS_TO_GENERATE=100
