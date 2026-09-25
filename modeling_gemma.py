@@ -7,40 +7,72 @@ from modeling_siglip import SiglipVisionModel, SiglipVisionConfig
 
 
 class GemmaConfig:
+    """Gemma 2 (2B) defaults, matching google/gemma-2-2b / PaliGemma 2 3B."""
+
     def __init__(
         self,
-        vocab_size,
-        hidden_size,
-        intermediate_size,
-        num_hidden_layers,
-        num_attention_heads,
-        num_key_value_heads,
+        vocab_size=256000,
+        hidden_size=2304,
+        intermediate_size=9216,
+        num_hidden_layers=26,
+        num_attention_heads=8,
+        num_key_value_heads=4,
         head_dim=256,
+        hidden_activation="gelu_pytorch_tanh",
         max_position_embeddings=8192,
+        initializer_range=0.02,
         rms_norm_eps=1e-6,
+        use_cache=True,
         rope_theta=10000.0,
         attention_bias=False,
         attention_dropout=0.0,
-        pad_token_id=None,
+        pad_token_id=0,
+        bos_token_id=2,
+        eos_token_id=1,
+        tie_word_embeddings=True,
+        query_pre_attn_scalar=256,
+        sliding_window=4096,
+        layer_types=None,
+        final_logit_softcapping=30.0,
+        attn_logit_softcapping=50.0,
+        use_bidirectional_attention=None,
         **kwargs,
     ):
 
         super().__init__()
 
+        self.model_type = kwargs.pop("model_type", "gemma2")
         self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
         self.head_dim = head_dim
+        self.hidden_activation = hidden_activation
+        self.initializer_range = initializer_range
+        self.use_cache = use_cache
         self.rope_theta = rope_theta
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
         self.num_hidden_layers = num_hidden_layers
-        self.max_position_embeddings = max_position_embeddings
         self.rms_norm_eps = rms_norm_eps
         self.pad_token_id = pad_token_id
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self.tie_word_embeddings = tie_word_embeddings
         self.attention_bias = attention_bias
         self.num_key_value_heads = num_key_value_heads
         self.attention_dropout = attention_dropout
+        self.query_pre_attn_scalar = query_pre_attn_scalar
+        self.sliding_window = sliding_window
+        self.attn_logit_softcapping = attn_logit_softcapping
+        self.final_logit_softcapping = final_logit_softcapping
+        self.use_bidirectional_attention = use_bidirectional_attention
+        if layer_types is None:
+            self.layer_types = [
+                "sliding_attention" if (i % 2 == 0) else "full_attention"
+                for i in range(self.num_hidden_layers)
+            ]
+        else:
+            self.layer_types = layer_types
 
 
 class KVCache:
@@ -80,27 +112,31 @@ class KVCache:
 
 
 class PaliGemmaConfig:
+    """PaliGemma 2 3B-pt-224 defaults (Gemma 2 2B language backbone)."""
+
     def __init__(
         self,
         vision_config=None,
         text_config=None,
         ignore_index=-100,
         image_token_index=256000,
-        vocab_size=257152,
-        projection_dim=2048,
-        hidden_size=2048,
-        pad_token_id=None,
+        vocab_size=257216,
+        projection_dim=2304,
+        hidden_size=2304,
+        pad_token_id=0,
         **kwargs,
     ):
         super().__init__()
 
         self.ignore_index = ignore_index
-        self.image_token_index = image_token_index
+        self.image_token_index = kwargs.get("image_token_id", image_token_index)
         self.hidden_size = hidden_size
-        self.vocab_size = vocab_size
+        self.projection_dim = projection_dim
+        self.vocab_size = kwargs.get("_vocab_size", vocab_size)
 
-        vision_config.pop("model_type", None)
         if isinstance(vision_config, dict):
+            vision_config = dict(vision_config)
+            vision_config.pop("model_type", None)
             self.vision_config = SiglipVisionConfig(**vision_config)
         elif isinstance(vision_config, SiglipVisionConfig):
             self.vision_config = vision_config
@@ -114,18 +150,65 @@ class PaliGemmaConfig:
         self.vision_config.projection_dim = projection_dim
 
         if isinstance(text_config, dict):
-            self.text_config = GemmaConfig(**text_config, pad_token_id=pad_token_id)
+            text_config = dict(text_config)
+            text_config.pop("model_type", None)
+            text_config.setdefault("pad_token_id", pad_token_id)
+            self.text_config = GemmaConfig(**text_config)
         elif isinstance(text_config, GemmaConfig):
             self.text_config = text_config
         elif text_config is None:
-            self.text_config = GemmaConfig(pad_token_id=pad_token_id)
+            text_config_dict = {
+                "vocab_size": self.vocab_size,
+                "hidden_size": hidden_size,
+                "pad_token_id": pad_token_id,
+            }
+            for k in [
+                "intermediate_size",
+                "num_hidden_layers",
+                "num_attention_heads",
+                "num_key_value_heads",
+                "head_dim",
+                "hidden_activation",
+                "max_position_embeddings",
+                "initializer_range",
+                "rms_norm_eps",
+                "use_cache",
+                "rope_theta",
+                "attention_bias",
+                "attention_dropout",
+                "bos_token_id",
+                "eos_token_id",
+                "tie_word_embeddings",
+                "query_pre_attn_scalar",
+                "sliding_window",
+                "layer_types",
+                "attn_logit_softcapping",
+                "final_logit_softcapping",
+                "use_bidirectional_attention",
+            ]:
+                if k in kwargs:
+                    text_config_dict[k] = kwargs[k]
+            self.text_config = GemmaConfig(**text_config_dict)
         else:
             self.text_config = text_config
 
-        self.text_config.num_image_tokens = (
-            self.vision_config.img_size // self.vision_config.patch_size
-        ) ** 2
-        self.vision_config.num_img_tokens = self.text_config.num_image_tokens
+        if self.text_config.use_bidirectional_attention is None:
+            self.text_config.use_bidirectional_attention = True
+
+        img_size = getattr(self.vision_config, "image_size", getattr(self.vision_config, "img_size", 224))
+        patch_size = self.vision_config.patch_size
+        num_patches = (img_size // patch_size) ** 2
+        self.text_config.num_image_tokens = num_patches
+        self.vision_config.num_img_tokens = num_patches
+        self.vision_config.num_image_tokens = num_patches
+
+    @property
+    def image_token_id(self):
+        return self.image_token_index
+
+    @image_token_id.setter
+    def image_token_id(self, value):
+        self.image_token_index = value
 
 
 class GemmaRMSNorm(nn.Module):
@@ -145,7 +228,7 @@ class GemmaRMSNorm(nn.Module):
 
 
 class GemmaRotaryEmbedding(nn.Module):
-    def __init__(self, dim: int, max_position_embeddings=2048, base=10000):
+    def __init__(self, dim: int, max_position_embeddings=8192, base=10000):
         super().__init__()
 
         self.dim = dim
@@ -165,13 +248,11 @@ class GemmaRotaryEmbedding(nn.Module):
 
     @torch.no_grad()
     def forward(self, x, position_ids):
-        # Ensure frequency tensor is on the correct GPU/CPU device
-        self.inv_freq.to(x.device)
-
         # Broadcast shapes for vectorized matrix multiplication
         # (Dim/2) => (1, Dim/2 , 1) => (B, Dim/2, 1)
+        inv_freq = self.inv_freq.to(x.device)
         inv_freq_expanded = (
-            self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+            inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         )
 
         # (B, Seq_len) => (B, 1, Seq_len)
@@ -259,8 +340,15 @@ class GemmaAttention(nn.Module):
         self.num_key_value_groups = (
             config.num_attention_heads // config.num_key_value_heads
         )
-        self.scale = self.head_dim**-0.5
+        # Gemma 2 scales attention by query_pre_attn_scalar, not head_dim
+        self.scaling = config.query_pre_attn_scalar**-0.5
+        self.scale = self.scaling
+        self.sliding_window = config.sliding_window
         self.is_causal = True
+        if config.layer_types is not None and layer_idx is not None:
+            self.attention_type = config.layer_types[layer_idx]
+        else:
+            self.attention_type = "full_attention"
 
         assert self.hidden_size % self.num_heads == 0
 
@@ -340,6 +428,11 @@ class GemmaAttention(nn.Module):
         attn_weights = (
             torch.matmul(query_states, key_states.transpose(2, 3)) * self.scale
         )
+
+        if self.config.attn_logit_softcapping is not None:
+            attn_weights = attn_weights / self.config.attn_logit_softcapping
+            attn_weights = torch.tanh(attn_weights)
+            attn_weights = attn_weights * self.config.attn_logit_softcapping
 
         assert attention_mask is not None
         attn_weights = attn_weights + attention_mask
@@ -453,14 +546,7 @@ class GemmaModel(nn.Module):
     ) -> torch.FloatTensor:
 
         # (B, Seq_len, hidden_size)
-        hidden_states = inputs_embeds
-
-        # (B, Seq_len, hidden_size)
-        normalizer = torch.tensor(
-            self.config.hidden_size**0.5, dtype=hidden_states.dtype
-        )
-
-        hidden_states = hidden_states * normalizer
+        hidden_states = inputs_embeds * (self.config.hidden_size**0.5)
 
         for decoder_layer in self.layers:
             # (B, Seq_len, hidden_size)
@@ -497,6 +583,10 @@ class GemmaForCausalLM(nn.Module):
         outputs = self.model(input_embeds, attention_mask, position_ids, kv_cache)
         hidden_states = outputs
         logits = self.lm_head(hidden_states)
+        if self.config.final_logit_softcapping is not None:
+            logits = logits / self.config.final_logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * self.config.final_logit_softcapping
         logits = logits.float()
         return_data = {"logits": logits}
 
@@ -549,7 +639,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         kv_cache: Optional[KVCache] = None,
     ):
         # (Batch, Num_Patches, Embed_Dim)
-        _, _, embed_dim = image_features.shape
+        embed_dim = inputs_embeds.shape[-1]
 
         batch_size, seq_len = input_ids.shape
         dtype, device = inputs_embeds.dtype, inputs_embeds.device
@@ -562,11 +652,13 @@ class PaliGemmaForConditionalGeneration(nn.Module):
             batch_size, seq_len, embed_dim, dtype=dtype, device=device
         )
 
-        text_mask = (input_ids != self.config.image_token_index) & (
-            input_ids != self.config.pad_token_id
-        )
+        text_mask = input_ids != self.config.image_token_index
+        if self.pad_token_id is not None and self.pad_token_id >= 0:
+            padding_mask = input_ids == self.pad_token_id
+            text_mask = text_mask & (~padding_mask)
+        else:
+            padding_mask = torch.zeros_like(input_ids, dtype=torch.bool)
         image_mask = input_ids == self.config.image_token_index
-        padding_mask = input_ids == self.config.pad_token_id
 
         # We need to expand the masks to the embedding dimension otherwise we can't use them in torch.where
         # (B,S) -> (B,S,1) -> (B,S, embed_dim)
@@ -581,54 +673,53 @@ class PaliGemmaForConditionalGeneration(nn.Module):
             text_mask_expanded, inputs_embeds, final_embeddings
         )
 
-        final_embeddings = final_embeddings.masked_scatter(
-            image_mask_expanded, scaled_image_features
-        )
+        if scaled_image_features.numel() > 0 and image_mask.any():
+            final_embeddings = final_embeddings.masked_scatter(
+                image_mask_expanded, scaled_image_features
+            )
         # Zero out padding tokens
 
         final_embeddings = torch.where(
             pad_mask_expanded, torch.zeros_like(final_embeddings), final_embeddings
         )
 
-        # dtype, device = inputs_embeds.dtype, inputs_embeds.device
-
         min_dtype = torch.finfo(dtype).min
 
         if kv_cache is None or kv_cache.num_items() == 0:
-            # Don't mask any token cause we are in the prefill phase
-            # this only works when we have no padding
-            # Mask out future tokens (Causal mapping)
+            # Prefill phase: full 2D bidirectional attention for prefix tokens
             causal_mask = torch.full(
-                (batch_size, seq_len, seq_len),
-                fill_value=0,
+                (batch_size, 1, seq_len, seq_len),
+                fill_value=0.0,
                 dtype=dtype,
                 device=device,
             )
-            # causal_mask = torch.full((batch_size, seq_len, seq_len), fill_value=min_dtype, dtype=dtype, device=device)
-            # causal_mask = torch.triu(causal_mask, diagonal=1)
+            if attention_mask is not None:
+                # Expand attention_mask (B, S) -> (B, 1, 1, S)
+                pad_mask = (attention_mask[:, None, None, :] == 0)
+                causal_mask = causal_mask.masked_fill(pad_mask, min_dtype)
 
-        else:
-            assert seq_len == 1
-            kv_len = kv_cache.num_items() + seq_len
-            # In decode phase, attend to all previous tokens
-            causal_mask = torch.full(
-                (batch_size, seq_len, kv_len), fill_value=0, dtype=dtype, device=device
-            )
-
-        # (B, Seq_len, kv_cache) => (B, Num_heads, seq_len, kv_cache)
-        causal_mask = causal_mask.unsqueeze(1)
-
-        if kv_cache is not None and kv_cache.num_items() > 0:
-            # position_ids = attention_mask.cumsum(-1)[:, -1]
-            # if position_ids.dim() == 1:
-            #     position_ids = position_ids.unsqueeze(0)
-            # kv_cache.num_items() already equals current sequence length (0-indexed position)
-            position_ids = torch.tensor([[kv_cache.num_items()]], device=device)
-
-        else:
             position_ids = (
                 (attention_mask.cumsum(-1) - 1)
                 .masked_fill_((attention_mask == 0), 0)
+                .to(device)
+            )
+        else:
+            assert seq_len == 1
+            total_kv_len = kv_cache.num_items() + 1
+            if attention_mask is None or attention_mask.shape[-1] < total_kv_len:
+                attention_mask = torch.ones(
+                    (batch_size, total_kv_len), dtype=torch.int64, device=device
+                )
+            kv_len = attention_mask.shape[-1]
+            causal_mask = torch.full(
+                (batch_size, 1, 1, kv_len), fill_value=0.0, dtype=dtype, device=device
+            )
+            pad_mask = (attention_mask[:, None, None, :] == 0)
+            causal_mask = causal_mask.masked_fill(pad_mask, min_dtype)
+
+            position_ids = (
+                (attention_mask.cumsum(-1)[:, -1:] - 1)
+                .masked_fill_((attention_mask[:, -1:] == 0), 0)
                 .to(device)
             )
 
@@ -642,13 +733,21 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         kv_cache: Optional[KVCache] = None,
     ) -> Tuple:
 
-        assert torch.all(attention_mask == 1), "The input cannot be padded"
+        batch_size, seq_len = input_ids.shape
+
+        if attention_mask is None:
+            if kv_cache is not None and kv_cache.num_items() > 0:
+                attention_mask = torch.ones(
+                    (batch_size, kv_cache.num_items() + 1),
+                    device=input_ids.device,
+                    dtype=torch.int64,
+                )
+            else:
+                attention_mask = torch.ones_like(input_ids)
 
         # appending (input_ids) to the end immediately feeds the sequence of token integers into
         # that retrieved embedding layer to convert them into high-dimensional vectors.
         input_embeds = self.language_model.get_input_embeddings()(input_ids)
-
-        batch_size, seq_len = input_ids.shape
 
         if pixel_values is not None:
             selected_image_feature = self.vision_tower(
