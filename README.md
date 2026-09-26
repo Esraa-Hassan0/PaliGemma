@@ -70,7 +70,11 @@ data/
 ├── paligemma-weights/
 │   └── paligemma-3b-pt-224/    ← model checkpoint directory
 ├── vae-oid/                    ← OID VAE weights (for segmentation)
-└── test_imgs/                  ← your input images
+└── test_imgs/                  ← input images and generated overlays
+    ├── img001.jpg
+    ├── img001_eye_seg.png
+    ├── img001_test_overlay.png
+    └── img002.jpg
 ```
 
 ---
@@ -139,6 +143,12 @@ python -m pytest
 ---
 
 ## Test Output
+
+The bundled test image used by the examples is:
+
+![PaliGemma test image](data/test_imgs/img002.jpg)
+
+It remains under `data/test_imgs/` alongside other local test inputs and generated overlays.
 
 Running the model on a table-scene image with `--prompt "describe en"`:
 
