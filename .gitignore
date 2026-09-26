@@ -1,4 +1,11 @@
 /__pycache__/
 __pycache__/
 *.py[cod]
-data/
+
+# Keep model and VAE weights out of Git, but track the small test assets.
+data/*
+!data/test_imgs/
+data/test_imgs/*
+!data/test_imgs/.gitkeep
+!data/test_imgs/*.jpg
+!data/test_imgs/*.png
