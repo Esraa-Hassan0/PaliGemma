@@ -42,6 +42,12 @@ cd VLM
 pip install -r requirements.txt
 ```
 
+For development and tests, install the project with its optional test dependency:
+
+```bash
+pip install -e ".[dev]"
+```
+
 **Requirements (key packages):**
 
 | Package | Version |
@@ -108,6 +114,14 @@ python inference.py \
   --vae_weights_dir data/vae-oid
 ```
 
+### Tests
+
+Run the component tests from the repository root:
+
+```bash
+python -m pytest
+```
+
 ### All Arguments
 
 | Argument | Default | Description |
@@ -145,8 +159,10 @@ VLM/
 ├── processing_paligemma.py    # PaliGemma processor (image + text)
 ├── variational_autoencoder.py # OID VQ-VAE decoder for segmentation masks
 ├── utils.py                   # HuggingFace weight loading utilities
-├── test_components.py         # Component unit tests
+├── tests/                     # Component tests
+│   └── test_components.py
 ├── run.sh                     # Convenience run script
+├── pyproject.toml              # Project and pytest configuration
 ├── requirements.txt           # Python dependencies
 ├── assets/                    # Images for documentation
 └── data/

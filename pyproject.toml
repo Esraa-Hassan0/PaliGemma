@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paligemma-vlm"
+version = "0.1.0"
+description = "Educational from-scratch PaliGemma vision-language model implementation"
+requires-python = ">=3.10"
+dependencies = [
+    "fire>=0.6.0",
+    "numpy>=1.26.4,<2.0.0",
+    "pillow>=10.3.0",
+    "safetensors>=0.4.3",
+    "sentencepiece",
+    "tiktoken",
+    "tokenizers>=0.20.0",
+    "torch>=2.3.0,<2.5.0",
+    "torchaudio>=2.3.0",
+    "torchvision>=0.18.0",
+    "tqdm>=4.66.4",
+    "transformers>=4.44.0,<5.0.0",
+    "huggingface-hub>=0.23.0,<1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0,<9.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.setuptools]
+py-modules = [
+    "inference",
+    "modeling_gemma",
+    "modeling_siglip",
+    "processing_paligemma",
+    "utils",
+    "variational_autoencoder",
+]
